@@ -1,6 +1,8 @@
 import { getServerSession } from 'next-auth'
-import { authOptions } from '../auth/[...nextauth]/route'
+import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
+import { getDB, saveGeneration } from '@/lib/db'
+import { checkAndUpdateRateLimit } from '@/lib/rate-limiter'
 
 export const runtime = 'nodejs'
 
@@ -12,14 +14,29 @@ export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions)
     
-    if (!session) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    // ✅ RATE LIMITING
+    const db = await getDB()
+    const { allowed, rateLimit } = await checkAndUpdateRateLimit(db, session.user.id)
+    
+    if (!allowed) {
+      const resetTime = new Date(rateLimit.resetAt).toLocaleTimeString()
+      return NextResponse.json(
+        { 
+          error: `Rate limit exceeded. You can generate ${rateLimit.remaining} more images. Try again after ${resetTime}`,
+          rateLimit 
+        },
+        { status: 429 }
+      )
     }
 
     const body = await request.json()
     const { transformType, images } = body
 
-    console.log('🎯 Request:', { transformType, imageCount: images?.length })
+    console.log('🎯 Request:', { transformType, imageCount: images?.length, userId: session.user.id })
 
     if (!transformType || !images || images.length === 0) {
       return NextResponse.json(
@@ -28,15 +45,34 @@ export async function POST(request: Request) {
       )
     }
 
-    if (!hasRealApiKey) {
-      console.log('🔧 DEMO MODE')
+    // Demo mode - chỉ dùng cho development
+    if (!hasRealApiKey && process.env.NODE_ENV === 'development') {
+      console.log('🔧 DEMO MODE (Development only)')
       const base64Image = images[0].replace(/^data:image\/\w+;base64,/, '')
       await new Promise(resolve => setTimeout(resolve, 1500))
+      
+      // Lưu vào database ngay cả trong demo mode
+      await saveGeneration(db, {
+        userId: session.user.id,
+        transformType,
+        inputImages: images,
+        outputImage: base64Image,
+        promptUsed: 'Demo mode'
+      })
+      
       return NextResponse.json({
         success: true,
         outputImage: base64Image,
-        message: 'Demo mode'
+        message: 'Demo mode',
+        rateLimit
       })
+    }
+
+    if (!hasRealApiKey) {
+      return NextResponse.json(
+        { error: 'Gemini API key not configured' },
+        { status: 500 }
+      )
     }
 
     console.log('🚀 PRODUCTION MODE: Calling Gemini API')
@@ -44,16 +80,14 @@ export async function POST(request: Request) {
     const prompts = {
       headshot: 'Edit this image: Create a professional corporate headshot. Transform the person to wear business professional attire, add studio lighting, clean solid color background, professional hair and makeup. Generate a polished professional portrait suitable for LinkedIn or corporate use.',
       
-      product_photo: 'Edit this image: Transform into commercial product photography. Remove current background, add pure white seamless background, add professional studio lighting with soft shadows, center the product, enhance colors and details. Generate a professional e-commerce quality product photo.',
+      outfit: 'Edit this image: Change the clothing and outfit of this person. Replace their current clothes with modern, stylish, fashionable attire. Keep the person same but generate completely different outfit - maybe casual chic, business casual, or trendy streetwear. Transform their clothing style.',
       
-      background_removal: 'Edit this image: Completely remove and erase the background. Keep only the main subject/person/object in focus. Replace background with solid white color or make it transparent. Clean up edges perfectly.',
+      interior: 'Edit this image: Place the furniture or object from the first image into the room shown in the second image. Match the scale and proportions appropriately, align perspective correctly with the room, match lighting conditions. Ensure the object fits naturally in the space.',
       
-      style_transfer: 'Edit this image: Transform into artistic painting. Apply oil painting or watercolor artistic style, add artistic brush strokes and creative effects, enhance colors artistically. Generate an artistic version of this image.',
-      
-      outfit: 'Edit this image: Change the clothing and outfit of this person. Replace their current clothes with modern, stylish, fashionable attire. Keep the person same but generate completely different outfit - maybe casual chic, business casual, or trendy streetwear. Transform their clothing style.'
+      background: 'Edit this image: Replace the background of this image while keeping the main subject intact. Cleanly separate the subject from the background, maintain natural edge transitions and lighting. Make the composite look seamless and realistic.',
     }
 
-    const prompt = prompts[transformType as keyof typeof prompts] || 'Transform this image'
+    const prompt = prompts[transformType as keyof typeof prompts] || prompts.headshot
 
     const imageParts = images.map((img: string) => {
       const base64Data = img.replace(/^data:image\/\w+;base64,/, '')
@@ -82,13 +116,12 @@ export async function POST(request: Request) {
     )
 
     const data = await response.json()
-    console.log('📦 Full API Response:', JSON.stringify(data, null, 2))
 
     if (!response.ok) {
       console.error('❌ API Error:', data)
       if (response.status === 429) {
         return NextResponse.json(
-          { error: 'API quota exceeded. Enable billing.' },
+          { error: 'Gemini API quota exceeded. Please try again later.' },
           { status: 429 }
         )
       }
@@ -97,16 +130,25 @@ export async function POST(request: Request) {
 
     if (data.candidates?.[0]?.content?.parts) {
       const parts = data.candidates[0].content.parts
-      console.log('📝 Parts:', JSON.stringify(parts, null, 2))
       
       const imageResult = parts.find((part: any) => part.inlineData?.data)
       
       if (imageResult) {
         console.log('✅ Found image in response')
+        
+        // ✅ LƯU VÀO DATABASE
+        await saveGeneration(db, {
+          userId: session.user.id,
+          transformType,
+          inputImages: images,
+          outputImage: imageResult.inlineData.data,
+          promptUsed: prompt
+        })
+        
         return NextResponse.json({
           success: true,
           outputImage: imageResult.inlineData.data,
-          rateLimit: { remaining: 10 }
+          rateLimit
         })
       }
       
@@ -115,7 +157,7 @@ export async function POST(request: Request) {
         console.log('⚠️ Model returned text:', textResult.text)
         return NextResponse.json({
           success: false,
-          error: `Model returned text: ${textResult.text.substring(0, 200)}`
+          error: `Model returned text instead of image. Try again with different images.`
         }, { status: 400 })
       }
     }

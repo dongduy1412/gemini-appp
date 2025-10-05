@@ -21,6 +21,7 @@ export const authOptions: NextAuthOptions = {
             image: user.image || undefined,
           })
           
+          // ✅ Set user.id để dùng trong session
           user.id = userId
           return true
         } catch (error) {
@@ -31,13 +32,15 @@ export const authOptions: NextAuthOptions = {
       return true
     },
     async session({ session, token }) {
+      // ✅ Add user.id vào session
       if (token?.sub) {
         session.user.id = token.sub
       }
       return session
     },
     async jwt({ token, user }) {
-      if (user) {
+      // ✅ Lưu user.id vào JWT token
+      if (user?.id) {
         token.sub = user.id
       }
       return token
@@ -45,6 +48,7 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: '/login',
+    error: '/login',
   },
   secret: process.env.NEXTAUTH_SECRET,
 }

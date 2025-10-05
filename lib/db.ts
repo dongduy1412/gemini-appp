@@ -2,11 +2,29 @@ import { Generation } from '@/types'
 
 type D1Database = any
 
+/**
+ * Get D1 Database instance from Cloudflare binding
+ * ✅ Works with edge runtime
+ */
 export async function getDB(): Promise<D1Database> {
-  // @ts-ignore
-  return globalThis.DB
+  // @ts-ignore - Cloudflare D1 binding
+  if (typeof DB !== 'undefined') {
+    // @ts-ignore
+    return DB
+  }
+  
+  // For development/testing without D1
+  if (process.env.NODE_ENV === 'development') {
+    console.warn('⚠️ D1 not available, using mock database')
+    return getMockDB()
+  }
+  
+  throw new Error('D1 database not found. Make sure DB binding is configured in wrangler.toml')
 }
 
+/**
+ * Save a new generation to database
+ */
 export async function saveGeneration(
   db: D1Database,
   generation: Omit<Generation, 'id' | 'createdAt'>
@@ -28,9 +46,13 @@ export async function saveGeneration(
     )
     .run()
 
+  console.log('✅ Saved generation to database:', id)
   return id
 }
 
+/**
+ * Get user's generation history
+ */
 export async function getUserGenerations(
   db: D1Database,
   userId: string,
@@ -46,6 +68,10 @@ export async function getUserGenerations(
     .bind(userId, limit)
     .all()
 
+  if (!result.results) {
+    return []
+  }
+
   return result.results.map((row: any) => ({
     id: row.id,
     userId: row.user_id,
@@ -57,6 +83,9 @@ export async function getUserGenerations(
   }))
 }
 
+/**
+ * Create or update user in database
+ */
 export async function createOrUpdateUser(
   db: D1Database,
   userData: {
@@ -66,15 +95,27 @@ export async function createOrUpdateUser(
     image?: string
   }
 ): Promise<string> {
+  // Check if user exists
   const existingUser = await db
     .prepare('SELECT id FROM users WHERE google_id = ?')
     .bind(userData.googleId)
     .first()
 
   if (existingUser) {
+    // Update existing user
+    await db
+      .prepare(
+        `UPDATE users 
+         SET email = ?, name = ?, image = ?
+         WHERE google_id = ?`
+      )
+      .bind(userData.email, userData.name, userData.image, userData.googleId)
+      .run()
+    
     return existingUser.id
   }
 
+  // Create new user
   const id = crypto.randomUUID()
 
   await db
@@ -85,5 +126,40 @@ export async function createOrUpdateUser(
     .bind(id, userData.googleId, userData.email, userData.name, userData.image)
     .run()
 
+  console.log('✅ Created new user:', id)
   return id
+}
+
+/**
+ * Mock database for development (when D1 not available)
+ */
+function getMockDB() {
+  const mockData: {
+    users: any[]
+    generations: any[]
+    rateLimits: any[]
+  } = {
+    users: [],
+    generations: [],
+    rateLimits: []
+  }
+
+  return {
+    prepare: (query: string) => ({
+      bind: (...args: any[]) => ({
+        run: async () => {
+          console.log('Mock DB run:', query, args)
+          return { success: true }
+        },
+        first: async () => {
+          console.log('Mock DB first:', query, args)
+          return null
+        },
+        all: async () => {
+          console.log('Mock DB all:', query, args)
+          return { results: [] }
+        }
+      })
+    })
+  }
 }
