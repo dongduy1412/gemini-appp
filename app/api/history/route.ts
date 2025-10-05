@@ -1,7 +1,8 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { getUserGenerations, deleteUserGenerations } from '@/lib/db'
+import { getUserGenerations } from '@/lib/db-postgres'
+import { sql } from '@vercel/postgres'
 
 export async function GET() {
   try {
@@ -11,7 +12,6 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // ✅ BỎ getDB()
     const history = await getUserGenerations(session.user.id)
 
     return NextResponse.json({ history })
@@ -32,8 +32,7 @@ export async function DELETE() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // ✅ BỎ getDB()
-    await deleteUserGenerations(session.user.id)
+    await sql`DELETE FROM generations WHERE user_id = ${session.user.id}`
     
     return NextResponse.json({ success: true })
   } catch (error) {

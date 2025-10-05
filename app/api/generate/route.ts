@@ -1,9 +1,8 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { saveGeneration, checkAndUpdateRateLimit } from '@/lib/db'
-
-export const runtime = 'nodejs'
+import { saveGeneration } from '@/lib/db-postgres'
+import { checkAndUpdateRateLimit } from '@/lib/rate-limiter-postgres'
 
 const hasRealApiKey = process.env.GEMINI_API_KEY && 
                       process.env.GEMINI_API_KEY !== 'test' &&
@@ -17,20 +16,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // ✅ LẤY DATA TỪ REQUEST
-    const body = await request.json()
-    const { transformType, images } = body
-
-    console.log('🎯 Request:', { transformType, imageCount: images?.length, userId: session.user.id })
-
-    if (!transformType || !images || images.length === 0) {
-      return NextResponse.json(
-        { error: 'Transform type and images are required' },
-        { status: 400 }
-      )
-    }
-
-    // ✅ RATE LIMITING
+    // Rate limiting
     const { allowed, rateLimit } = await checkAndUpdateRateLimit(session.user.id)
     
     if (!allowed) {
@@ -44,27 +30,16 @@ export async function POST(request: Request) {
       )
     }
 
-    // Demo mode - chỉ dùng cho development
-    if (!hasRealApiKey && process.env.NODE_ENV === 'development') {
-      console.log('🔧 DEMO MODE (Development only)')
-      const base64Image = images[0].replace(/^data:image\/\w+;base64,/, '')
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
-      // Lưu vào database ngay cả trong demo mode
-      await saveGeneration({
-        userId: session.user.id,
-        transformType,
-        inputImages: images,
-        outputImage: base64Image,
-        promptUsed: 'Demo mode'
-      })
-      
-      return NextResponse.json({
-        success: true,
-        outputImage: base64Image,
-        message: 'Demo mode',
-        rateLimit
-      })
+    const body = await request.json()
+    const { transformType, images } = body
+
+    console.log('Request:', { transformType, imageCount: images?.length, userId: session.user.id })
+
+    if (!transformType || !images || images.length === 0) {
+      return NextResponse.json(
+        { error: 'Transform type and images are required' },
+        { status: 400 }
+      )
     }
 
     if (!hasRealApiKey) {
@@ -74,7 +49,7 @@ export async function POST(request: Request) {
       )
     }
 
-    console.log('🚀 PRODUCTION MODE: Calling Gemini API')
+    console.log('Calling Gemini API...')
 
     const prompts = {
       headshot: 'Edit this image: Create a professional corporate headshot. Transform the person to wear business professional attire, add studio lighting, clean solid color background, professional hair and makeup. Generate a polished professional portrait suitable for LinkedIn or corporate use.',
@@ -117,7 +92,7 @@ export async function POST(request: Request) {
     const data = await response.json()
 
     if (!response.ok) {
-      console.error('❌ API Error:', data)
+      console.error('API Error:', data)
       if (response.status === 429) {
         return NextResponse.json(
           { error: 'Gemini API quota exceeded. Please try again later.' },
@@ -133,9 +108,9 @@ export async function POST(request: Request) {
       const imageResult = parts.find((part: any) => part.inlineData?.data)
       
       if (imageResult) {
-        console.log('✅ Found image in response')
+        console.log('Found image in response')
         
-        // ✅ LƯU VÀO DATABASE
+        // Save to database
         await saveGeneration({
           userId: session.user.id,
           transformType,
@@ -153,19 +128,19 @@ export async function POST(request: Request) {
       
       const textResult = parts.find((part: any) => part.text)
       if (textResult) {
-        console.log('⚠️ Model returned text:', textResult.text)
+        console.log('Model returned text:', textResult.text)
         return NextResponse.json({
           success: false,
-          error: `Model returned text instead of image. Try again with different images.`
+          error: 'Model returned text instead of image. Try again with different images.'
         }, { status: 400 })
       }
     }
 
-    console.error('❌ No valid data in response')
+    console.error('No valid data in response')
     throw new Error('Model did not return an image')
 
   } catch (error: any) {
-    console.error('❌ Error:', error.message)
+    console.error('Error:', error.message)
     return NextResponse.json(
       { error: error.message || 'Failed to generate image' },
       { status: 500 }
