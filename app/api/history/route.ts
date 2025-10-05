@@ -1,7 +1,7 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { getDB, getUserGenerations } from '@/lib/db'
+import { getUserGenerations, deleteUserGenerations } from '@/lib/db'
 
 export async function GET() {
   try {
@@ -11,9 +11,8 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // ✅ LẤY HISTORY TỪ DATABASE
-    const db = await getDB()
-    const history = await getUserGenerations(db, session.user.id)
+    // ✅ BỎ getDB()
+    const history = await getUserGenerations(session.user.id)
 
     return NextResponse.json({ history })
   } catch (error) {
@@ -33,13 +32,8 @@ export async function DELETE() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // ✅ XÓA HISTORY TỪ DATABASE
-    const db = await getDB()
-    
-    await db
-      .prepare('DELETE FROM generations WHERE user_id = ?')
-      .bind(session.user.id)
-      .run()
+    // ✅ BỎ getDB()
+    await deleteUserGenerations(session.user.id)
     
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -1,6 +1,6 @@
 import { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
-import { getDB, createOrUpdateUser } from './db'
+import { createOrUpdateUser } from './db'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -13,15 +13,14 @@ export const authOptions: NextAuthOptions = {
     async signIn({ user, account, profile }) {
       if (account?.provider === 'google' && profile?.email) {
         try {
-          const db = await getDB()
-          const userId = await createOrUpdateUser(db, {
+          // ✅ BỎ getDB(), gọi trực tiếp
+          const userId = await createOrUpdateUser({
             googleId: account.providerAccountId,
             email: profile.email,
             name: user.name || undefined,
             image: user.image || undefined,
           })
           
-          // ✅ Set user.id để dùng trong session
           user.id = userId
           return true
         } catch (error) {
@@ -32,14 +31,12 @@ export const authOptions: NextAuthOptions = {
       return true
     },
     async session({ session, token }) {
-      // ✅ Add user.id vào session
       if (token?.sub) {
         session.user.id = token.sub
       }
       return session
     },
     async jwt({ token, user }) {
-      // ✅ Lưu user.id vào JWT token
       if (user?.id) {
         token.sub = user.id
       }
