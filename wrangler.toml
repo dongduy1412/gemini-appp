@@ -1,0 +1,14 @@
+name = "gemini-appp"
+compatibility_date = "2024-10-04"
+pages_build_output_dir = ".vercel/output/static"
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "gemini_db"
+database_id = "88c2266c-0c37-4f5a-a3d6-e04bc77cb850"
+
+# Environment variables (for production)
+[env.production]
+vars = { NODE_ENV = "production" }
+
