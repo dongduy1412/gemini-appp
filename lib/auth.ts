@@ -11,6 +11,7 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: 'jwt',
+    maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   cookies: {
     sessionToken: {
@@ -19,28 +20,7 @@ export const authOptions: NextAuthOptions = {
         : 'next-auth.session-token',
       options: {
         httpOnly: true,
-        sameSite: 'none',  // 🔥 quan trọng
-        secure: process.env.NODE_ENV === 'production', // 🔥 bắt buộc khi dùng none
-        path: '/',
-      },
-    },
-    csrfToken: {
-      name: process.env.NODE_ENV === 'production'
-        ? '__Host-next-auth.csrf-token'
-        : 'next-auth.csrf-token',
-      options: {
-        httpOnly: true,
-        sameSite: 'none',  // 🔥
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-      },
-    },
-    callbackUrl: {
-      name: process.env.NODE_ENV === 'production'
-        ? '__Secure-next-auth.callback-url'
-        : 'next-auth.callback-url',
-      options: {
-        sameSite: 'none',  // 🔥
+        sameSite: 'lax', // 🔥 Đổi từ 'none' thành 'lax'
         secure: process.env.NODE_ENV === 'production',
         path: '/',
       },
@@ -59,19 +39,29 @@ export const authOptions: NextAuthOptions = {
           user.id = userId
           return true
         } catch (error) {
-          console.error('Sign in error:', error)
+          console.error('❌ Sign in error:', error)
           return false
         }
       }
       return true
     },
     async session({ session, token }) {
-      if (token?.sub) session.user.id = token.sub
+      if (token?.sub) {
+        session.user.id = token.sub
+      }
       return session
     },
-    async jwt({ token, user }) {
-      if (user?.id) token.sub = user.id
+    async jwt({ token, user, account }) {
+      if (user?.id) {
+        token.sub = user.id
+      }
       return token
+    },
+    async redirect({ url, baseUrl }) {
+      // 🔥 Đảm bảo redirect về đúng domain
+      if (url.startsWith('/')) return `${baseUrl}${url}`
+      else if (new URL(url).origin === baseUrl) return url
+      return baseUrl
     },
   },
   pages: {
@@ -79,4 +69,5 @@ export const authOptions: NextAuthOptions = {
     error: '/login',
   },
   secret: process.env.NEXTAUTH_SECRET,
+  debug: process.env.NODE_ENV === 'development', // 🔥 Bật debug mode
 }

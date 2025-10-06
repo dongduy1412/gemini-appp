@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
@@ -13,6 +13,7 @@ import { Sparkles, Download, AlertCircle, CheckCircle } from 'lucide-react'
 export default function Home() {
   const { data: session, status } = useSession()
   const router = useRouter()
+  const [isRedirecting, setIsRedirecting] = useState(false)
 
   const [selectedUseCase, setSelectedUseCase] = useState<TransformType | null>(null)
   const [images, setImages] = useState<string[]>([])
@@ -21,7 +22,15 @@ export default function Home() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [historyRefresh, setHistoryRefresh] = useState(0)
 
-  if (status === 'loading') {
+  // 🔥 Xử lý redirect khi chưa đăng nhập
+  useEffect(() => {
+    if (status === 'unauthenticated' && !isRedirecting) {
+      setIsRedirecting(true)
+      router.replace('/login')
+    }
+  }, [status, router, isRedirecting])
+
+  if (status === 'loading' || isRedirecting) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full"></div>
@@ -29,8 +38,8 @@ export default function Home() {
     )
   }
 
+  // 🔥 Nếu chưa authenticated thì không render gì
   if (status === 'unauthenticated') {
-    router.push('/login')
     return null
   }
 

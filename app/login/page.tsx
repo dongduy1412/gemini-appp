@@ -2,25 +2,33 @@
 
 import { signIn, useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Sparkles } from 'lucide-react'
 
 export default function LoginPage() {
-  const { status } = useSession()
+  const { data: session, status } = useSession()
   const router = useRouter()
+  const [isRedirecting, setIsRedirecting] = useState(false)
 
   useEffect(() => {
-    if (status === 'authenticated') {
-      router.push('/')
+    // 🔥 Tránh redirect loop
+    if (status === 'authenticated' && !isRedirecting) {
+      setIsRedirecting(true)
+      router.replace('/') // Dùng replace thay vì push
     }
-  }, [status, router])
+  }, [status, router, isRedirecting])
 
-  if (status === 'loading') {
+  if (status === 'loading' || isRedirecting) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full"></div>
       </div>
     )
+  }
+
+  // 🔥 Nếu đã authenticated thì không render gì
+  if (status === 'authenticated') {
+    return null
   }
 
   return (
@@ -40,7 +48,10 @@ export default function LoginPage() {
 
         <div className="space-y-4">
           <button
-            onClick={() => signIn('google', { callbackUrl: '/' })}
+            onClick={() => {
+              // 🔥 Không cần chỉ định callbackUrl, để NextAuth tự động xử lý
+              signIn('google')
+            }}
             className="w-full flex items-center justify-center gap-3 bg-white border-2 border-gray-300 hover:border-gray-400 text-gray-700 py-3 px-4 rounded-xl font-medium transition shadow-sm hover:shadow"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
