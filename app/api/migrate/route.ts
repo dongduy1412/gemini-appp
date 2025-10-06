@@ -1,6 +1,9 @@
 import { createClient } from '@vercel/postgres'
 import { NextResponse } from 'next/server'
 
+// Disable prerendering
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const client = createClient()
   
@@ -44,7 +47,7 @@ export async function GET() {
       tables: result.rows 
     })
   } catch (error: any) {
-    await client.end()
+    try { await client.end() } catch {}
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
