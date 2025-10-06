@@ -1,19 +1,13 @@
+import { createClient } from '@vercel/postgres'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
+  const client = createClient()
+  
   try {
-    // Dynamic import để tránh lỗi build
-    const { sql } = await import('@vercel/postgres')
+    await client.connect()
     
-    // Check connection
-    if (!process.env.POSTGRES_URL) {
-      return NextResponse.json({ 
-        error: 'POSTGRES_URL not found',
-        env: Object.keys(process.env).filter(k => k.includes('POSTGRES'))
-      }, { status: 500 })
-    }
-    
-    await sql`CREATE TABLE IF NOT EXISTS users (
+    await client.sql`CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       google_id TEXT UNIQUE NOT NULL,
       email TEXT NOT NULL,
@@ -22,7 +16,7 @@ export async function GET() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`
     
-    await sql`CREATE TABLE IF NOT EXISTS generations (
+    await client.sql`CREATE TABLE IF NOT EXISTS generations (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       transform_type TEXT NOT NULL,
@@ -32,26 +26,25 @@ export async function GET() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`
     
-    await sql`CREATE TABLE IF NOT EXISTS rate_limits (
+    await client.sql`CREATE TABLE IF NOT EXISTS rate_limits (
       user_id TEXT PRIMARY KEY,
       count INTEGER DEFAULT 0,
       reset_at TIMESTAMP NOT NULL
     )`
     
-    // Verify tables created
-    const tables = await sql`
+    const result = await client.sql`
       SELECT table_name FROM information_schema.tables 
       WHERE table_schema = 'public'
     `
     
+    await client.end()
+    
     return NextResponse.json({ 
       success: true, 
-      tables: tables.rows.map(r => r.table_name)
+      tables: result.rows 
     })
   } catch (error: any) {
-    return NextResponse.json({ 
-      error: error.message,
-      code: error.code 
-    }, { status: 500 })
+    await client.end()
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
