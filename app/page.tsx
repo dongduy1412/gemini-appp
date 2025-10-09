@@ -1,20 +1,34 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import Header from '@/components/Header'
-import UseCaseSelector from '@/components/UseCaseSelector'
-import ImageUploader from '@/components/ImageUploader'
-import HistorySidebar from '@/components/HistorySidebar'
-import { TransformType, GenerateResponse } from '@/types'
-import { Sparkles, Download, AlertCircle, CheckCircle } from 'lucide-react'
+import { Header } from '@/components/header'
+import { UseCaseSelector } from '@/components/use-case-selector'
+import { ImageUploader } from '@/components/image-uploader'
+import { HistorySidebar } from '@/components/history-sidebar'
+import { Sparkles, CheckCircle, AlertCircle, Download } from 'lucide-react'
 
-export default function Home() {
-  const { data: session, status } = useSession()
+type TransformType = 'virtual-tryon' | 'interior-design' | 'headshot' | 'product-placement'
+interface User {
+  id: string
+  email: string
+  name: string
+  image: string
+}
+
+interface SessionResponse {
+  user: User
+}
+
+interface GenerateResponse {
+  result?: string
+  error?: string
+}
+
+export default function Dashboard() {
   const router = useRouter()
-  const [isRedirecting, setIsRedirecting] = useState(false)
-
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
   const [selectedUseCase, setSelectedUseCase] = useState<TransformType | null>(null)
   const [images, setImages] = useState<string[]>([])
   const [generating, setGenerating] = useState(false)
@@ -22,15 +36,26 @@ export default function Home() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [historyRefresh, setHistoryRefresh] = useState(0)
 
-  // 🔥 Xử lý redirect khi chưa đăng nhập
   useEffect(() => {
-    if (status === 'unauthenticated' && !isRedirecting) {
-      setIsRedirecting(true)
-      router.replace('/login')
+  const checkAuth = async () => {
+    try {
+      const res = await fetch('/api/auth/session')
+      if (res.ok) {
+        const data = await res.json() as SessionResponse
+        setUser(data.user)
+      } else {
+        router.push('/login')
+      }
+    } catch {
+      router.push('/login')
+    } finally {
+      setLoading(false)
     }
-  }, [status, router, isRedirecting])
+  }
+  checkAuth()
+}, [router])
 
-  if (status === 'loading' || isRedirecting) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full"></div>
@@ -38,60 +63,85 @@ export default function Home() {
     )
   }
 
-  // 🔥 Nếu chưa authenticated thì không render gì
-  if (status === 'unauthenticated') {
+  if (!user) {
     return null
   }
 
   const maxImages = selectedUseCase === 'headshot' ? 1 : 2
 
   const handleGenerate = async () => {
-    if (!selectedUseCase || images.length === 0) {
-      setMessage({ type: 'error', text: 'Please select a use case and upload images' })
-      return
-    }
-
-    setGenerating(true)
-    setMessage(null)
-    setResult(null)
-
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transformType: selectedUseCase,
-          images,
-        }),
-      })
-
-      const data: GenerateResponse = await res.json()
-
-      if (data.success && data.outputImage) {
-        setResult(`data:image/png;base64,${data.outputImage}`)
-        setMessage({
-          type: 'success',
-          text: `Success! ${data.rateLimit?.remaining || 0} generations remaining this hour.`,
-        })
-        setHistoryRefresh((prev) => prev + 1)
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Generation failed' })
-      }
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || 'Network error' })
-    } finally {
-      setGenerating(false)
-    }
+  if (!selectedUseCase || images.length === 0) {
+    setMessage({ type: 'error', text: 'Vui lòng chọn kiểu chuyển đổi và tải ảnh lên' })
+    return
   }
+
+  setGenerating(true)
+  setMessage(null)
+  setResult(null)
+
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transformType: selectedUseCase,
+        images,
+      }),
+    })
+
+    const data = await res.json() as GenerateResponse
+
+    if (res.ok && data.result) {
+      setResult(data.result)
+      setMessage({ type: 'success', text: 'Tạo ảnh thành công!' })
+      
+      // 🔥 LƯU VÀO HISTORY
+      const historyItem = {
+        id: Date.now().toString(),
+        transformType: selectedUseCase,
+        inputImages: images,
+        outputImage: data.result,
+        createdAt: new Date().toISOString()
+      }
+      
+      // Save to localStorage
+      try {
+        const history = JSON.parse(localStorage.getItem('gemini_history') || '[]')
+        history.unshift(historyItem) // Add to beginning
+        
+        if (history.length > 20) {
+          history.length = 20
+        }
+        
+        localStorage.setItem('gemini_history', JSON.stringify(history))
+        console.log('✅ Saved to history:', historyItem.id)
+      } catch (error) {
+        console.error('❌ Failed to save history:', error)
+      }
+      
+      // Trigger history refresh
+      setHistoryRefresh(prev => prev + 1)
+      console.log('🔄 History refresh triggered')
+      
+    } else {
+      setMessage({ type: 'error', text: data.error || 'Tạo ảnh thất bại' })
+    }
+  } catch (error: any) {
+    setMessage({ type: 'error', text: error.message || 'Lỗi kết nối' })
+  } finally {
+    setGenerating(false)
+  }
+}
+
+
 
   const handleSelectFromHistory = (imageBase64: string) => {
     setImages([imageBase64])
-    setMessage({ type: 'success', text: 'Image loaded from history' })
+    setMessage({ type: 'success', text: 'Đã tải ảnh từ lịch sử' })
   }
 
   const handleDownload = () => {
     if (!result) return
-
     const link = document.createElement('a')
     link.href = result
     link.download = `gemini-${selectedUseCase}-${Date.now()}.png`
@@ -103,27 +153,36 @@ export default function Home() {
       <Header />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome back, {user.name}!</h2>
+          <p className="text-gray-600">Transform your photos with AI-powered tools</p>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* History Sidebar */}
           <div className="lg:col-span-1 order-2 lg:order-1">
-            <HistorySidebar
+            <HistorySidebar 
               onSelectImage={handleSelectFromHistory}
               refreshTrigger={historyRefresh}
             />
           </div>
 
+          {/* Main Content */}
           <div className="lg:col-span-3 order-1 lg:order-2 space-y-6">
+            {/* Step 1: Select Use Case */}
             <section className="bg-white rounded-xl border border-gray-200 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                Step 1: Choose Transformation
-              </h2>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Bước 1: Chọn kiểu chuyển đổi
+              </h3>
               <UseCaseSelector selected={selectedUseCase} onSelect={setSelectedUseCase} />
             </section>
 
+            {/* Step 2: Upload Images */}
             {selectedUseCase && (
               <section className="bg-white rounded-xl border border-gray-200 p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Step 2: Upload Images
-                </h2>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  Bước 2: Tải ảnh lên
+                </h3>
                 <ImageUploader
                   images={images}
                   maxImages={maxImages}
@@ -133,6 +192,7 @@ export default function Home() {
               </section>
             )}
 
+            {/* Step 3: Generate */}
             {selectedUseCase && images.length > 0 && (
               <section className="bg-white rounded-xl border border-gray-200 p-6">
                 <button
@@ -143,12 +203,12 @@ export default function Home() {
                   {generating ? (
                     <>
                       <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
-                      Generating...
+                      Đang tạo...
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-5 h-5" />
-                      Generate Image
+                      Tạo ảnh
                     </>
                   )}
                 </button>
@@ -178,21 +238,22 @@ export default function Home() {
               </section>
             )}
 
+            {/* Result */}
             {result && (
               <section className="bg-white rounded-xl border border-gray-200 p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-900">Result</h2>
+                  <h3 className="text-lg font-semibold text-gray-900">Kết quả</h3>
                   <button
                     onClick={handleDownload}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition text-sm font-medium"
                   >
                     <Download className="w-4 h-4" />
-                    Download
+                    Tải xuống
                   </button>
                 </div>
                 <img
                   src={result}
-                  alt="Generated result"
+                  alt="Kết quả đã tạo"
                   className="w-full rounded-lg border-2 border-gray-200"
                 />
               </section>

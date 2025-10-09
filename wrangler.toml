@@ -1,0 +1,9 @@
+name = "gemini-app"
+main = ".open-next/worker.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gemini-db"
+database_id = "b18db7af-2be1-4406-8cdf-6721c8dd7790"

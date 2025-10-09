@@ -1,149 +1,104 @@
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { saveGeneration } from '@/lib/db-postgres'
-import { checkAndUpdateRateLimit } from '@/lib/rate-limiter-postgres'
+import { validateRequest } from '@/lib/lucia'
+import { GoogleGenerativeAI } from '@google/generative-ai'
+// Remove: import { getCloudflareContext } from '@opennextjs/cloudflare'
+import { generateId } from 'lucia'
 
-const hasRealApiKey = process.env.GEMINI_API_KEY && 
-                      process.env.GEMINI_API_KEY !== 'test' &&
-                      process.env.GEMINI_API_KEY.length > 20
+export const runtime = 'edge'
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+
+interface GenerateRequest {
+  transformType: string
+  images: string[]
+}
 
 export async function POST(request: Request) {
   try {
-    const session = await getServerSession(authOptions)
+    const { user } = await validateRequest()
     
-    if (!session?.user?.id) {
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Rate limiting
-    const { allowed, rateLimit } = await checkAndUpdateRateLimit(session.user.id)
-    
-    if (!allowed) {
-      const resetTime = new Date(rateLimit.resetAt).toLocaleTimeString()
-      return NextResponse.json(
-        { 
-          error: `Rate limit exceeded. You can generate ${rateLimit.remaining} more images. Try again after ${resetTime}`,
-          rateLimit 
-        },
-        { status: 429 }
-      )
-    }
-
-    const body = await request.json()
+    const body = await request.json() as GenerateRequest
     const { transformType, images } = body
-
-    console.log('Request:', { transformType, imageCount: images?.length, userId: session.user.id })
-
+    
     if (!transformType || !images || images.length === 0) {
       return NextResponse.json(
-        { error: 'Transform type and images are required' },
+        { error: 'Missing required fields' },
         { status: 400 }
       )
     }
 
-    if (!hasRealApiKey) {
-      return NextResponse.json(
-        { error: 'Gemini API key not configured' },
-        { status: 500 }
-      )
-    }
-
-    console.log('Calling Gemini API...')
-
-    const prompts = {
-      headshot: 'Edit this image: Create a professional corporate headshot. Transform the person to wear business professional attire, add studio lighting, clean solid color background, professional hair and makeup. Generate a polished professional portrait suitable for LinkedIn or corporate use.',
-      
-      outfit: 'Edit this image: Change the clothing and outfit of this person. Replace their current clothes with modern, stylish, fashionable attire. Keep the person same but generate completely different outfit - maybe casual chic, business casual, or trendy streetwear. Transform their clothing style.',
-      
-      interior: 'Edit this image: Place the furniture or object from the first image into the room shown in the second image. Match the scale and proportions appropriately, align perspective correctly with the room, match lighting conditions. Ensure the object fits naturally in the space.',
-      
-      background: 'Edit this image: Replace the background of this image while keeping the main subject intact. Cleanly separate the subject from the background, maintain natural edge transitions and lighting. Make the composite look seamless and realistic.',
-    }
-
-    const prompt = prompts[transformType as keyof typeof prompts] || prompts.headshot
-
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash-image-preview' 
+    })
+    
+    const prompt = getPromptForTransformType(transformType)
+    
     const imageParts = images.map((img: string) => {
-      const base64Data = img.replace(/^data:image\/\w+;base64,/, '')
-      const mimeType = img.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/png'
-      return { inlineData: { mimeType, data: base64Data } }
+      const base64Data = img.includes('base64,') 
+        ? img.split('base64,')[1] 
+        : img
+      
+      let mimeType = 'image/jpeg'
+      if (img.includes('image/png')) {
+        mimeType = 'image/png'
+      } else if (img.includes('image/webp')) {
+        mimeType = 'image/webp'
+      }
+      
+      return {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType,
+        },
+      }
     })
 
-    const requestData = {
-      contents: [{
-        role: 'user',
-        parts: [{ text: prompt }, ...imageParts]
-      }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192
+    const result = await model.generateContent([prompt, ...imageParts])
+    const response = await result.response
+    const candidates = response.candidates
+    
+    let outputImage = ''
+    
+    if (candidates && candidates[0]) {
+      const parts = candidates[0].content.parts
+      
+      for (const part of parts) {
+        if (part.inlineData) {
+          const imageBase64 = part.inlineData.data
+          outputImage = `data:image/png;base64,${imageBase64}`
+          break
+        }
       }
     }
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData)
-      }
-    )
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      console.error('API Error:', data)
-      if (response.status === 429) {
-        return NextResponse.json(
-          { error: 'Gemini API quota exceeded. Please try again later.' },
-          { status: 429 }
-        )
-      }
-      throw new Error(data.error?.message || `API Error: ${response.status}`)
+    
+    if (!outputImage) {
+      outputImage = response.text()
     }
 
-    if (data.candidates?.[0]?.content?.parts) {
-      const parts = data.candidates[0].content.parts
-      
-      const imageResult = parts.find((part: any) => part.inlineData?.data)
-      
-      if (imageResult) {
-        console.log('Found image in response')
-        
-        // Save to database
-        await saveGeneration({
-          userId: session.user.id,
-          transformType,
-          inputImages: images,
-          outputImage: imageResult.inlineData.data,
-          promptUsed: prompt
-        })
-        
-        return NextResponse.json({
-          success: true,
-          outputImage: imageResult.inlineData.data,
-          rateLimit
-        })
-      }
-      
-      const textResult = parts.find((part: any) => part.text)
-      if (textResult) {
-        console.log('Model returned text:', textResult.text)
-        return NextResponse.json({
-          success: false,
-          error: 'Model returned text instead of image. Try again with different images.'
-        }, { status: 400 })
-      }
-    }
-
-    console.error('No valid data in response')
-    throw new Error('Model did not return an image')
-
+    // TODO: Save to D1 after deploy
+    // Will be implemented with Cloudflare bindings at runtime
+    
+    return NextResponse.json({ result: outputImage })
+    
   } catch (error: any) {
-    console.error('Error:', error.message)
+    console.error('Generate error:', error)
     return NextResponse.json(
       { error: error.message || 'Failed to generate image' },
       { status: 500 }
     )
   }
+}
+
+function getPromptForTransformType(type: string): string {
+  const prompts: Record<string, string> = {
+    'virtual-tryon': 'Apply this clothing item to the person in a realistic way.',
+    'interior-design': 'Transform this interior space with the given furniture.',
+    'headshot': 'Create a professional headshot photo.',
+    'product-placement': 'Place this product naturally in the scene.',
+  }
+  return prompts[type] || 'Transform this image.'
 }
