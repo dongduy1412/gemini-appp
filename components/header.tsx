@@ -3,7 +3,18 @@
 import { Sparkles, LogOut } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
-export function Header() {
+interface User {
+  id: string
+  email: string
+  name: string
+  image: string
+}
+
+interface HeaderProps {
+  user: User
+}
+
+export function Header({ user }: HeaderProps) {
   const router = useRouter()
 
   const handleLogout = async () => {
@@ -25,13 +36,16 @@ export function Header() {
             </div>
           </div>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition"
-          >
-            <LogOut className="w-4 h-4" />
-            Logout
-          </button>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-700 font-medium">{user.email}</span>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </button>
+          </div>
         </div>
       </div>
     </header>

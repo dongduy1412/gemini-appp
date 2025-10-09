@@ -4,9 +4,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
 import { UseCaseSelector } from '@/components/use-case-selector'
-import { ImageUploader } from '@/components/image-uploader'
 import { HistorySidebar } from '@/components/history-sidebar'
-import { Sparkles, CheckCircle, AlertCircle, Download } from 'lucide-react'
+import { Sparkles, CheckCircle, AlertCircle, Download, Upload, X } from 'lucide-react'
 
 type TransformType = 'virtual-tryon' | 'interior-design' | 'headshot' | 'product-placement'
 interface User {
@@ -37,23 +36,23 @@ export default function Dashboard() {
   const [historyRefresh, setHistoryRefresh] = useState(0)
 
   useEffect(() => {
-  const checkAuth = async () => {
-    try {
-      const res = await fetch('/api/auth/session')
-      if (res.ok) {
-        const data = await res.json() as SessionResponse
-        setUser(data.user)
-      } else {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/auth/session')
+        if (res.ok) {
+          const data = await res.json() as SessionResponse
+          setUser(data.user)
+        } else {
+          router.push('/login')
+        }
+      } catch {
         router.push('/login')
+      } finally {
+        setLoading(false)
       }
-    } catch {
-      router.push('/login')
-    } finally {
-      setLoading(false)
     }
-  }
-  checkAuth()
-}, [router])
+    checkAuth()
+  }, [router])
 
   if (loading) {
     return (
@@ -69,74 +68,92 @@ export default function Dashboard() {
 
   const maxImages = selectedUseCase === 'headshot' ? 1 : 2
 
-  const handleGenerate = async () => {
-  if (!selectedUseCase || images.length === 0) {
-    setMessage({ type: 'error', text: 'Vui lòng chọn kiểu chuyển đổi và tải ảnh lên' })
-    return
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
+    const file = e.target.files?.[0]
+    if (!file || !file.type.startsWith('image/')) return
+    
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage({ type: 'error', text: 'File quá lớn! Tối đa 5MB' })
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const newImages = [...images]
+      newImages[index] = event.target?.result as string
+      setImages(newImages)
+    }
+    reader.readAsDataURL(file)
   }
 
-  setGenerating(true)
-  setMessage(null)
-  setResult(null)
+  const removeImage = (index: number) => {
+    const newImages = images.filter((_, i) => i !== index)
+    setImages(newImages)
+  }
 
-  try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transformType: selectedUseCase,
-        images,
-      }),
-    })
+  const handleGenerate = async () => {
+    if (!selectedUseCase || images.length === 0) {
+      setMessage({ type: 'error', text: 'Vui lòng chọn kiểu chuyển đổi và tải ảnh lên' })
+      return
+    }
 
-    const data = await res.json() as GenerateResponse
+    setGenerating(true)
+    setMessage(null)
+    setResult(null)
 
-    if (res.ok && data.result) {
-      setResult(data.result)
-      setMessage({ type: 'success', text: 'Tạo ảnh thành công!' })
-      
-      // 🔥 LƯU VÀO HISTORY
-      const historyItem = {
-        id: Date.now().toString(),
-        transformType: selectedUseCase,
-        inputImages: images,
-        outputImage: data.result,
-        createdAt: new Date().toISOString()
-      }
-      
-      // Save to localStorage
-      try {
-        const history = JSON.parse(localStorage.getItem('gemini_history') || '[]')
-        history.unshift(historyItem) // Add to beginning
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transformType: selectedUseCase,
+          images,
+        }),
+      })
+
+      const data = await res.json() as GenerateResponse
+
+      if (res.ok && data.result) {
+        setResult(data.result)
+        setMessage({ type: 'success', text: 'Tạo ảnh thành công!' })
         
-        if (history.length > 20) {
-          history.length = 20
+        // Save to history
+        const historyItem = {
+          id: Date.now().toString(),
+          transformType: selectedUseCase,
+          inputImages: images,
+          outputImage: data.result,
+          createdAt: new Date().toISOString()
         }
         
-        localStorage.setItem('gemini_history', JSON.stringify(history))
-        console.log('✅ Saved to history:', historyItem.id)
-      } catch (error) {
-        console.error('❌ Failed to save history:', error)
+        try {
+          const history = JSON.parse(localStorage.getItem('gemini_history') || '[]')
+          history.unshift(historyItem)
+          
+          if (history.length > 20) {
+            history.length = 20
+          }
+          
+          localStorage.setItem('gemini_history', JSON.stringify(history))
+        } catch (error) {
+          console.error('Failed to save history:', error)
+        }
+        
+        // Trigger history refresh
+        setHistoryRefresh(prev => prev + 1)
+        
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Tạo ảnh thất bại' })
       }
-      
-      // Trigger history refresh
-      setHistoryRefresh(prev => prev + 1)
-      console.log('🔄 History refresh triggered')
-      
-    } else {
-      setMessage({ type: 'error', text: data.error || 'Tạo ảnh thất bại' })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Lỗi kết nối' })
+    } finally {
+      setGenerating(false)
     }
-  } catch (error: any) {
-    setMessage({ type: 'error', text: error.message || 'Lỗi kết nối' })
-  } finally {
-    setGenerating(false)
   }
-}
-
-
 
   const handleSelectFromHistory = (imageBase64: string) => {
-    setImages([imageBase64])
+    setResult(imageBase64)
     setMessage({ type: 'success', text: 'Đã tải ảnh từ lịch sử' })
   }
 
@@ -150,14 +167,9 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
+      <Header user={user} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome back, {user.name}!</h2>
-          <p className="text-gray-600">Transform your photos with AI-powered tools</p>
-        </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* History Sidebar */}
           <div className="lg:col-span-1 order-2 lg:order-1">
@@ -183,12 +195,48 @@ export default function Dashboard() {
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">
                   Bước 2: Tải ảnh lên
                 </h3>
-                <ImageUploader
-                  images={images}
-                  maxImages={maxImages}
-                  onImagesChange={setImages}
-                  disabled={generating}
-                />
+                
+                <div className={`grid ${maxImages === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
+                  {[...Array(maxImages)].map((_, index) => (
+                    <div key={index} className="relative">
+                      {images[index] ? (
+                        <div className="relative group">
+                          <img
+                            src={images[index]}
+                            alt={`Upload ${index + 1}`}
+                            className="w-full h-64 object-cover rounded-lg border-2 border-gray-200"
+                          />
+                          <button
+                            onClick={() => removeImage(index)}
+                            disabled={generating}
+                            className="absolute top-2 right-2 p-2 bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition shadow-lg hover:bg-red-600"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-gray-400 hover:bg-gray-50 transition">
+                          <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                            <Upload className="w-12 h-12 text-gray-400 mb-3" />
+                            <p className="mb-2 text-sm text-gray-600 font-medium">
+                              Kéo thả ảnh vào đây hoặc click để chọn
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Tối đa {maxImages} ảnh, mỗi ảnh ≤ 5MB
+                            </p>
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleFileUpload(e, index)}
+                            disabled={generating}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -251,11 +299,13 @@ export default function Dashboard() {
                     Tải xuống
                   </button>
                 </div>
-                <img
-                  src={result}
-                  alt="Kết quả đã tạo"
-                  className="w-full rounded-lg border-2 border-gray-200"
-                />
+                <div className="flex justify-center">
+                  <img
+                    src={result}
+                    alt="Kết quả đã tạo"
+                    className="max-w-full max-h-[600px] rounded-lg border-2 border-gray-200 object-contain"
+                  />
+                </div>
               </section>
             )}
           </div>
