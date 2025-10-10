@@ -102,6 +102,7 @@ export default function Dashboard() {
     setResult(null)
 
     try {
+      // Generate image
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -114,38 +115,44 @@ export default function Dashboard() {
       const data = await res.json() as GenerateResponse
 
       if (res.ok && data.result) {
+        console.log('✅ Generate success')
+        
         setResult(data.result)
-        setMessage({ type: 'success', text: 'Tạo ảnh thành công!' })
+        setMessage({ type: 'success', text: 'Tạo ảnh thành công! 🎉' })
         
-        // Save to history
-        const historyItem = {
-          id: Date.now().toString(),
-          transformType: selectedUseCase,
-          inputImages: images,
-          outputImage: data.result,
-          createdAt: new Date().toISOString()
-        }
-        
+        // Save to D1 database via API
         try {
-          const history = JSON.parse(localStorage.getItem('gemini_history') || '[]')
-          history.unshift(historyItem)
-          
-          if (history.length > 20) {
-            history.length = 20
+          const saveRes = await fetch('/api/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transformType: selectedUseCase,
+              inputImages: images,
+              outputImage: data.result,
+            }),
+          })
+
+          if (saveRes.ok) {
+            console.log('✅ Saved to D1 database')
+            
+            // Trigger history refresh
+            setTimeout(() => {
+              setHistoryRefresh(prev => prev + 1)
+            }, 100)
+          } else {
+            const error = await saveRes.json()
+            console.error('❌ Failed to save to D1:', error)
           }
-          
-          localStorage.setItem('gemini_history', JSON.stringify(history))
         } catch (error) {
-          console.error('Failed to save history:', error)
+          console.error('❌ Error saving to D1:', error)
         }
-        
-        // Trigger history refresh
-        setHistoryRefresh(prev => prev + 1)
         
       } else {
+        console.error('❌ Generate failed:', data.error)
         setMessage({ type: 'error', text: data.error || 'Tạo ảnh thất bại' })
       }
     } catch (error: any) {
+      console.error('❌ Generate error:', error)
       setMessage({ type: 'error', text: error.message || 'Lỗi kết nối' })
     } finally {
       setGenerating(false)
@@ -153,6 +160,7 @@ export default function Dashboard() {
   }
 
   const handleSelectFromHistory = (imageBase64: string) => {
+    console.log('📸 Selected from history')
     setResult(imageBase64)
     setMessage({ type: 'success', text: 'Đã tải ảnh từ lịch sử' })
   }

@@ -5,3 +5,12 @@ declare module '@opennextjs/cloudflare' {
     DB: D1Database
   }
 }
+
+// Extend process.env for Edge Runtime
+declare global {
+  namespace NodeJS {
+    interface ProcessEnv {
+      DB?: D1Database
+    }
+  }
+}
